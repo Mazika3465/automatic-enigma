@@ -1,247 +1,312 @@
-name: All Builds (Linux, macOS, Windows, Android, IPA, APK, AAB)
+import pygame
+import random
+import sys
+import time
+import arabic_reshaper
+from bidi.algorithm import get_display
+import os
+import json
 
-on:
-  # Runs on push to any of the below branches
-  push:
-    branches:
-      - master
-      - main
-  # Runs on pull request events that target one of the below branches
-  pull_request:
-    branches:
-      - master
-      - main
+# Initialize pygame
+pygame.init()
 
-  # Allows you to run this workflow manually from the Actions tab of the repository
-  workflow_dispatch:
+# Screen dimensions
+WIDTH, HEIGHT = 800, 600
 
-env:
-  # https://flet.dev/docs/publish#versioning
-  BUILD_NUMBER: 1
-  BUILD_VERSION: 1.0.0
-  PYTHON_VERSION: 3.12.2
-  FLUTTER_VERSION: 3.22.2
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+LEVEL_COLORS = [WHITE, (200, 200, 200), (150, 150, 150), (100, 100, 100), BLACK]  # ألوان المستويات
 
-jobs:
-  build-linux:
-    runs-on: ubuntu-latest
+# Create screen
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("الفوز للقوي - معمول بواسطة محمود")
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+# Clock for controlling frame rate
+clock = pygame.time.Clock()
 
-    - name: Setup Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+# Load assets
+player_image = pygame.image.load("player_with_gun.png")  # صورة اللاعب
+player_image = pygame.transform.scale(player_image, (50, 50))
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+enemy_image = pygame.image.load("mutant_chicken.png")  # صورة الفراخ المتحولة
+enemy_image = pygame.transform.scale(enemy_image, (50, 50))
 
-    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+# Player properties
+player_size = 50
+player_x = WIDTH // 2
+player_y = HEIGHT - 100
+player_speed = 5
+player_level = 1  # مستوى اللاعب
+kills_for_next_level = random.randint(5, 10)  # عدد القتلى المطلوب للانتقال إلى المستوى التالي
 
-    - name: Patch for linux build
-      run: |
-        flutter doctor
-        sudo apt-get update -y
-        sudo apt-get install -y ninja-build libgtk-3-dev
-        flutter doctor
+# Obstacle properties
+obstacle_width = 50
+obstacle_height = 50
+obstacle_speed = 3
+obstacles = []
 
-    - name: Flet Build Linux
-      run: |
-        flutter config --no-analytics 
-        flet build linux --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+# Bullet properties
+bullets = []
+bullet_width = 5
+bullet_height = 10
+bullet_speed = 7
 
-    - name: Upload Linux Artifact
-      uses: actions/upload-artifact@v4.3.4
-      with:
-        name: linux-build-artifact
-        path: build/linux
-        if-no-files-found: warn
-        overwrite: false
+# Enemy bullet properties
+enemy_bullets = []
+enemy_bullet_width = 5
+enemy_bullet_height = 10
+enemy_bullet_speed = 3
 
-  build-macos:
-    runs-on: macos-latest
+# Game state
+is_game_over = False
+score = 0
+kills = 0  # عدد القتلى
+start_time = time.time()  # لتتبع الوقت
+is_firing = False  # حالة إطلاق النار
+level = 1  # المستوى الحالي
+highest_score = 0  # أعلى سكور
+highest_kills = 0  # أعلى عدد قتلى
+control_mode = "keyboard"  # وضع التحكم الافتراضي
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+# Font for game over text, score, and time
+font = pygame.font.Font(None, 60)
+score_font = pygame.font.Font(None, 28)
 
-    - name: Setup Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+# Save and load player level
+SAVE_FILE = "player_data.json"
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+def save_player_data():
+    data = {
+        "highest_score": highest_score,
+        "highest_kills": highest_kills,
+        "player_level": player_level
+    }
+    with open(SAVE_FILE, "w") as f:
+        json.dump(data, f)
 
-    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+def load_player_data():
+    global highest_score, highest_kills, player_level
+    if os.path.exists(SAVE_FILE):
+        with open(SAVE_FILE, "r") as f:
+            data = json.load(f)
+            highest_score = data.get("highest_score", 0)
+            highest_kills = data.get("highest_kills", 0)
+            player_level = data.get("player_level", 1)
 
-    - name: Flet Build macOS
-      run: |
-        flutter config --no-analytics
-        flet build macos --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+# Load saved data
+load_player_data()
 
-    - name: Upload macOS Artifact
-      uses: actions/upload-artifact@v4.3.4
-      with:
-        name: macos-build-artifact
-        path: build/macos
-        if-no-files-found: warn
-        overwrite: false
+# Function to reset the game
+def reset_game():
+    global player_x, player_y, obstacles, bullets, enemy_bullets, is_game_over, score, kills, obstacle_speed, start_time, level, player_level, kills_for_next_level
+    player_x = WIDTH // 2
+    player_y = HEIGHT - 100
+    obstacles = []
+    bullets = []
+    enemy_bullets = []
+    is_game_over = False
+    score = 0
+    kills = 0
+    obstacle_speed = 3
+    start_time = time.time()
+    level = 1
+    kills_for_next_level = random.randint(5, 10)
 
-  build-windows:
-    runs-on: windows-latest
+# Function to generate obstacles
+def generate_obstacle():
+    x = random.randint(0, WIDTH - obstacle_width)
+    y = -obstacle_height
+    obstacles.append([x, y])
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+# Function to update obstacles
+def update_obstacles():
+    global is_game_over, score, obstacle_speed
+    for obstacle in obstacles[:]:
+        obstacle[1] += obstacle_speed
+        if obstacle[1] > HEIGHT:
+            obstacles.remove(obstacle)
+        # Check collision
+        if (
+            player_x < obstacle[0] + obstacle_width and
+            player_x + player_size > obstacle[0] and
+            player_y < obstacle[1] + obstacle_height and
+            player_y + player_size > obstacle[1]
+        ):
+            is_game_over = True
 
-    - name: Setup Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+# Function to draw obstacles
+def draw_obstacles():
+    for obstacle in obstacles:
+        screen.blit(enemy_image, (obstacle[0], obstacle[1]))
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+# Function to update bullets
+def update_bullets():
+    global score, kills, player_level, kills_for_next_level
+    for bullet in bullets[:]:
+        bullet[1] -= bullet_speed
+        if bullet[1] < 0:
+            bullets.remove(bullet)
+        else:
+            for obstacle in obstacles[:]:
+                if (
+                    bullet[0] < obstacle[0] + obstacle_width and
+                    bullet[0] + bullet_width > obstacle[0] and
+                    bullet[1] < obstacle[1] + obstacle_height and
+                    bullet[1] + bullet_height > obstacle[1]
+                ):
+                    obstacles.remove(obstacle)
+                    bullets.remove(bullet)
+                    score += 10
+                    kills += 1
+                    # Check if player levels up
+                    if kills >= kills_for_next_level:
+                        player_level += 1
+                        kills_for_next_level += random.randint(5, 10)
+                    break
 
-    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+# Function to update enemy bullets
+def update_enemy_bullets():
+    global is_game_over
+    for bullet in enemy_bullets[:]:
+        bullet[1] += enemy_bullet_speed
+        if bullet[1] > HEIGHT:
+            enemy_bullets.remove(bullet)
+        elif (
+            player_x < bullet[0] + enemy_bullet_width and
+            player_x + player_size > bullet[0] and
+            player_y < bullet[1] + enemy_bullet_height and
+            player_y + player_size > bullet[1]
+        ):
+            is_game_over = True
 
-    - name: Flet Build Windows
-      run: |
-        flutter config --no-analytics
-        flet build windows --verbose --no-rich-output --build-number=$env:BUILD_NUMBER --build-version=$env:BUILD_VERSION
+# Function to draw bullets
+def draw_bullets():
+    for bullet in bullets:
+        pygame.draw.rect(screen, BLACK, (bullet[0], bullet[1], bullet_width, bullet_height))
 
-    - name: Upload Windows Artifact
-      uses: actions/upload-artifact@v4.3.4
-      with:
-        name: windows-build-artifact
-        path: build/windows
-        if-no-files-found: warn
-        overwrite: false
+# Function to draw enemy bullets
+def draw_enemy_bullets():
+    for bullet in enemy_bullets:
+        pygame.draw.rect(screen, RED, (bullet[0], bullet[1], enemy_bullet_width, enemy_bullet_height))
 
-  build-aab:
-    runs-on: macos-latest
+# Game loop
+running = True
+while running:
+    # Change background color based on level
+    screen.fill(LEVEL_COLORS[min(level - 1, len(LEVEL_COLORS) - 1)])
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            save_player_data()
+            running = False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE and not is_game_over:
+                is_firing = True  # بدء إطلاق النار
+            if event.key == pygame.K_r and is_game_over:
+                if score > highest_score:
+                    highest_score = score
+                if kills > highest_kills:
+                    highest_kills = kills
+                save_player_data()
+                reset_game()
+            if event.key == pygame.K_c:  # تبديل وضع التحكم
+                control_mode = "touch" if control_mode == "keyboard" else "keyboard"
+        if event.type == pygame.KEYUP:
+            if event.key == pygame.K_SPACE:
+                is_firing = False  # إيقاف إطلاق النار
 
-    - name: Setup Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+    if is_game_over:
+        game_over_text = font.render("Game Over!", True, BLACK)
+        restart_text = score_font.render("Press R to Restart", True, BLACK)
+        screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 2 - game_over_text.get_height()))
+        screen.blit(restart_text, (WIDTH // 2 - restart_text.get_width() // 2, HEIGHT // 2 + 20))
+        pygame.display.flip()
+        continue
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+    # Get keys pressed
+    keys = pygame.key.get_pressed()
+    if control_mode == "keyboard":
+        if (keys[pygame.K_UP] or keys[pygame.K_w]) and player_y > 0:
+            player_y -= player_speed
+        if (keys[pygame.K_DOWN] or keys[pygame.K_s]) and player_y < HEIGHT - player_size:
+            player_y += player_speed
+        if (keys[pygame.K_LEFT] or keys[pygame.K_a]) and player_x > 0:
+            player_x -= player_speed
+        if (keys[pygame.K_RIGHT] or keys[pygame.K_d]) and player_x < WIDTH - player_size:
+            player_x += player_speed
 
-    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+    # Fire bullets continuously if space is held
+    if is_firing and not is_game_over:
+        bullets.append([player_x + player_size // 2 - bullet_width // 2, player_y])
 
-    - name: Flet Build AAB
-      run: |
-        flutter config --no-analytics
-        flet build aab --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+    # Generate enemy bullets periodically
+    for obstacle in obstacles:
+        if random.randint(1, 100) == 1:  # إطلاق نار بطيء
+            enemy_bullets.append([obstacle[0] + obstacle_width // 2, obstacle[1] + obstacle_height])
 
-    - name: Upload AAB Artifact
-      uses: actions/upload-artifact@v4.3.4
-      with:
-        name: aab-build-artifact
-        path: build/aab
-        if-no-files-found: warn
-        overwrite: false
+    # Update and draw obstacles
+    update_obstacles()
+    draw_obstacles()
 
-  build-apk:
-    runs-on: ubuntu-latest
+    # Update and draw bullets
+    update_bullets()
+    draw_bullets()
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    # Update and draw enemy bullets
+    update_enemy_bullets()
+    draw_enemy_bullets()
 
-    - name: Setup Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+    # Draw player
+    screen.blit(player_image, (player_x, player_y))
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+    # Generate obstacles periodically
+    if random.randint(1, 30) == 1:
+        generate_obstacle()
 
-    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+    # Increase score over time
+    score += 1
 
-    - name: Setup Java JDK
-      uses: actions/setup-java@v4.2.1
-      with:
-        distribution: 'temurin'
-        java-version: '21'
+    # Increase obstacle speed and level over time
+    if score % 100 == 0:
+        obstacle_speed += 0.1
+        if score % 500 == 0:
+            level += 1
 
-    - name: Flet Build APK
-      run: |
-        flutter config --no-analytics
-        flet build apk --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+    # Draw score
+    score_text = score_font.render(f"Score: {score}", True, BLACK)
+    screen.blit(score_text, (10, 10))
 
-    - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4.3.4
-      with:
-        name: apk-build-artifact
-        path: build/apk
-        if-no-files-found: warn
-        overwrite: false
+    # Draw kills
+    kills_text = score_font.render(f"Kills: {kills}", True, BLACK)
+    screen.blit(kills_text, (10, 40))
 
-  build-ipa:
-    runs-on: macos-latest
+    # Draw player level
+    level_text = score_font.render(f"Player Level: {player_level}", True, BLACK)
+    screen.blit(level_text, (10, 70))
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    # Draw elapsed time in minutes and seconds
+    elapsed_time = int(time.time() - start_time)
+    minutes = elapsed_time // 60
+    seconds = elapsed_time % 60
+    time_text = score_font.render(f"Time: {minutes}m {seconds}s", True, BLACK)
+    screen.blit(time_text, (10, 100))
 
-    - name: Setup Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+    # Draw highest score and kills
+    high_score_text = score_font.render(f"High Score: {highest_score}", True, BLACK)
+    high_kills_text = score_font.render(f"High Kills: {highest_kills}", True, BLACK)
+    screen.blit(high_score_text, (10, 130))
+    screen.blit(high_kills_text, (10, 160))
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+    # Draw credits (Arabic text reshaped)
+    reshaped_text = arabic_reshaper.reshape("by Mahmoud")
+    bidi_text = get_display(reshaped_text)
+    credits_text = score_font.render(bidi_text, True, BLACK)
+    screen.blit(credits_text, (10, HEIGHT - 30))
 
-    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+    pygame.display.flip()
+    clock.tick(30)
 
-    - name: Flet Build IPA
-      run: |
-        flutter config --no-analytics
-        flet build ipa --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION 
-
-    - name: Upload IPA Artifact
-      uses: actions/upload-artifact@v4.3.4
-      with:
-        name: ipa-build-artifact
-        path: build/ipa
-        if-no-files-found: warn
-        overwrite: fals
+pygame.quit()
+sys.exit()
